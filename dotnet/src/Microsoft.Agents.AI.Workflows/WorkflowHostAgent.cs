@@ -20,11 +20,12 @@ internal sealed class WorkflowHostAgent : AIAgent
     private readonly IWorkflowExecutionEnvironment _executionEnvironment;
     private readonly bool _includeExceptionDetails;
     private readonly bool _includeWorkflowOutputsInResponse;
+    private readonly WorkflowChatHistoryProvider _chatHistoryProvider;
     private readonly Task<ProtocolDescriptor> _describeTask;
 
     private readonly ConcurrentDictionary<string, string> _assignedSessionIds = [];
 
-    public WorkflowHostAgent(Workflow workflow, string? id = null, string? name = null, string? description = null, IWorkflowExecutionEnvironment? executionEnvironment = null, bool includeExceptionDetails = false, bool includeWorkflowOutputsInResponse = false)
+    public WorkflowHostAgent(Workflow workflow, string? id = null, string? name = null, string? description = null, IWorkflowExecutionEnvironment? executionEnvironment = null, bool includeExceptionDetails = false, bool includeWorkflowOutputsInResponse = false, WorkflowChatHistoryOptions? chatHistoryOptions = null)
     {
         this._workflow = Throw.IfNull(workflow);
 
@@ -42,6 +43,10 @@ internal sealed class WorkflowHostAgent : AIAgent
 
         this._includeExceptionDetails = includeExceptionDetails;
         this._includeWorkflowOutputsInResponse = includeWorkflowOutputsInResponse;
+
+        // The provider holds no per-session state (that lives in AgentSession.StateBag), so a single instance
+        // built from the options can safely be shared across all sessions created by this agent.
+        this._chatHistoryProvider = new WorkflowChatHistoryProvider(chatHistoryOptions);
 
         this._id = id;
         this.Name = name;
@@ -74,7 +79,7 @@ internal sealed class WorkflowHostAgent : AIAgent
     }
 
     protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
-        => new(new WorkflowSession(this._workflow, this.GenerateNewId(), this._executionEnvironment, this._includeExceptionDetails, this._includeWorkflowOutputsInResponse));
+        => new(new WorkflowSession(this._workflow, this.GenerateNewId(), this._executionEnvironment, this._includeExceptionDetails, this._includeWorkflowOutputsInResponse, this._chatHistoryProvider));
 
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(AgentSession session, JsonSerializerOptions? jsonSerializerOptions = null, CancellationToken cancellationToken = default)
     {
@@ -89,7 +94,7 @@ internal sealed class WorkflowHostAgent : AIAgent
     }
 
     protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(JsonElement serializedState, JsonSerializerOptions? jsonSerializerOptions = null, CancellationToken cancellationToken = default)
-        => new(new WorkflowSession(this._workflow, serializedState, this._executionEnvironment, this._includeExceptionDetails, this._includeWorkflowOutputsInResponse, jsonSerializerOptions));
+        => new(new WorkflowSession(this._workflow, serializedState, this._executionEnvironment, this._includeExceptionDetails, this._includeWorkflowOutputsInResponse, jsonSerializerOptions, this._chatHistoryProvider));
 
     private async ValueTask<WorkflowSession> UpdateSessionAsync(IEnumerable<ChatMessage> messages, AgentSession? session = null, CancellationToken cancellationToken = default)
     {
@@ -100,9 +105,9 @@ internal sealed class WorkflowHostAgent : AIAgent
             throw new ArgumentException($"Incompatible session type: {session.GetType()} (expecting {typeof(WorkflowSession)})", nameof(session));
         }
 
-        // For workflow threads, messages are added directly via the internal AddMessages method
-        // The MessageStore methods are used for agent invocation scenarios
-        workflowSession.ChatHistoryProvider.AddMessages(session, messages);
+        // For workflow threads, request messages are added directly via the internal bookmark protocol.
+        // The MessageStore methods are used for agent invocation scenarios.
+        workflowSession.ChatHistoryProvider.AddRequestMessages(session, messages);
         return workflowSession;
     }
 
@@ -126,8 +131,8 @@ internal sealed class WorkflowHostAgent : AIAgent
         }
 
         AgentResponse response = merger.ComputeMerged(workflowSession.LastResponseId!, this.Id, this.Name);
-        workflowSession.ChatHistoryProvider.AddMessages(workflowSession, response.Messages);
-        workflowSession.ChatHistoryProvider.UpdateBookmark(workflowSession);
+        workflowSession.ChatHistoryProvider.AddResponseMessages(workflowSession, response.Messages);
+        await workflowSession.ChatHistoryProvider.UpdateBookmarkAsync(workflowSession, cancellationToken).ConfigureAwait(false);
 
         return response;
     }
@@ -153,7 +158,7 @@ internal sealed class WorkflowHostAgent : AIAgent
         }
 
         AgentResponse response = merger.ComputeMerged(workflowSession.LastResponseId!, this.Id, this.Name);
-        workflowSession.ChatHistoryProvider.AddMessages(workflowSession, response.Messages);
-        workflowSession.ChatHistoryProvider.UpdateBookmark(workflowSession);
+        workflowSession.ChatHistoryProvider.AddResponseMessages(workflowSession, response.Messages);
+        await workflowSession.ChatHistoryProvider.UpdateBookmarkAsync(workflowSession, cancellationToken).ConfigureAwait(false);
     }
 }

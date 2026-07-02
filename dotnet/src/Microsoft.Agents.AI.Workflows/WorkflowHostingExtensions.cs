@@ -24,6 +24,9 @@ public static class WorkflowHostingExtensions
     /// in the <see cref="ErrorContent"/> representing the workflow error.</param>
     /// <param name="includeWorkflowOutputsInResponse">If <see langword="true"/>, will transform outgoing workflow outputs
     /// into content in <see cref="AgentResponseUpdate"/>s or the <see cref="AgentResponse"/> as appropriate.</param>
+    /// <param name="chatHistoryOptions">Optional <see cref="WorkflowChatHistoryOptions"/> controlling how chat history is
+    /// managed for the sessions created by the resulting <see cref="AIAgent"/>, including message reduction and filtering.
+    /// When <see langword="null"/>, default behavior is used (no reduction or filtering).</param>
     /// <returns></returns>
     public static AIAgent AsAIAgent(
         this Workflow workflow,
@@ -32,9 +35,10 @@ public static class WorkflowHostingExtensions
         string? description = null,
         IWorkflowExecutionEnvironment? executionEnvironment = null,
         bool includeExceptionDetails = false,
-        bool includeWorkflowOutputsInResponse = false)
+        bool includeWorkflowOutputsInResponse = false,
+        WorkflowChatHistoryOptions? chatHistoryOptions = null)
     {
-        return new WorkflowHostAgent(workflow, id, name, description, executionEnvironment, includeExceptionDetails, includeWorkflowOutputsInResponse);
+        return new WorkflowHostAgent(workflow, id, name, description, executionEnvironment, includeExceptionDetails, includeWorkflowOutputsInResponse, chatHistoryOptions);
     }
 
     internal static FunctionCallContent ToFunctionCall(this ExternalRequest request)

@@ -300,6 +300,193 @@ public class WorkflowHostSmokeTests : AIAgentHostingExecutorTestsBase
     }
 
     /// <summary>
+    /// Tests that when no <see cref="WorkflowChatHistoryOptions"/> are supplied, the created
+    /// session still receives a default chat history provider instance.
+    /// </summary>
+    [Fact]
+    public async Task Test_AsAgent_CreatesDefaultChatHistoryProviderWhenNoOptionsSuppliedAsync()
+    {
+        // Arrange
+        TestReplayAgent agent = new(TestMessages, TestAgentId, TestAgentName);
+        Workflow workflow = new WorkflowBuilder(agent).Build();
+        AIAgent workflowAgent = workflow.AsAIAgent("WorkflowAgent");
+
+        // Act
+        AgentSession session = await workflowAgent.CreateSessionAsync();
+
+        // Assert
+        WorkflowSession workflowSession = session.Should().BeOfType<WorkflowSession>().Subject;
+        workflowSession.ChatHistoryProvider.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Tests that the chat history provider is shared across all sessions created by the
+    /// hosting agent, which is safe because per-session state lives in the
+    /// <see cref="AgentSession.StateBag"/>.
+    /// </summary>
+    [Fact]
+    public async Task Test_AsAgent_ChatHistoryProviderIsSharedAcrossSessionsAsync()
+    {
+        // Arrange
+        TestReplayAgent agent = new(TestMessages, TestAgentId, TestAgentName);
+        Workflow workflow = new WorkflowBuilder(agent).Build();
+        AIAgent workflowAgent = workflow.AsAIAgent("WorkflowAgent");
+
+        // Act
+        AgentSession firstSession = await workflowAgent.CreateSessionAsync();
+        AgentSession secondSession = await workflowAgent.CreateSessionAsync();
+
+        // Assert
+        WorkflowSession firstWorkflowSession = firstSession.Should().BeOfType<WorkflowSession>().Subject;
+        WorkflowSession secondWorkflowSession = secondSession.Should().BeOfType<WorkflowSession>().Subject;
+        firstWorkflowSession.ChatHistoryProvider.Should().BeSameAs(secondWorkflowSession.ChatHistoryProvider);
+    }
+
+    /// <summary>
+    /// Tests that the chat history provider is also shared with a session deserialized by the
+    /// hosting agent.
+    /// </summary>
+    [Fact]
+    public async Task Test_AsAgent_ChatHistoryProviderIsSharedAfterDeserializationAsync()
+    {
+        // Arrange
+        TestReplayAgent agent = new(TestMessages, TestAgentId, TestAgentName);
+        Workflow workflow = new WorkflowBuilder(agent).Build();
+        AIAgent workflowAgent = workflow.AsAIAgent("WorkflowAgent");
+
+        AgentSession session = await workflowAgent.CreateSessionAsync();
+        JsonElement serialized = await workflowAgent.SerializeSessionAsync(session);
+
+        // Act
+        AgentSession deserialized = await workflowAgent.DeserializeSessionAsync(serialized);
+
+        // Assert
+        WorkflowSession originalWorkflowSession = session.Should().BeOfType<WorkflowSession>().Subject;
+        WorkflowSession deserializedWorkflowSession = deserialized.Should().BeOfType<WorkflowSession>().Subject;
+        deserializedWorkflowSession.ChatHistoryProvider.Should().BeSameAs(originalWorkflowSession.ChatHistoryProvider);
+    }
+
+    /// <summary>
+    /// Tests that a <see cref="WorkflowChatHistoryOptions.ChatReducer"/> configured to trigger
+    /// after messages are added reduces the stored chat history.
+    /// </summary>
+    [Fact]
+    public async Task Test_AsAgent_ChatReducerReducesStoredHistoryAsync()
+    {
+        // Arrange
+        TestReplayAgent agent = new(TestMessages, TestAgentId, TestAgentName);
+        Workflow workflow = new WorkflowBuilder(agent).Build();
+        ChatMessage reducedMessage = new(ChatRole.Assistant, "reduced") { MessageId = "reduced-1" };
+        RecordingChatReducer reducer = new([reducedMessage]);
+        WorkflowChatHistoryOptions options = new()
+        {
+            ChatReducer = reducer,
+            ReducerTriggerEvent = WorkflowChatHistoryOptions.ChatReducerTriggerEvent.AfterMessageAdded,
+        };
+        AIAgent workflowAgent = workflow.AsAIAgent("WorkflowAgent", chatHistoryOptions: options);
+
+        // Act
+        AgentSession session = await workflowAgent.CreateSessionAsync();
+        await workflowAgent.RunAsync(new ChatMessage(ChatRole.User, "Hello"), session);
+
+        // Assert
+        WorkflowSession workflowSession = session.Should().BeOfType<WorkflowSession>().Subject;
+        ChatMessage[] sessionMessages = workflowSession.ChatHistoryProvider.GetAllMessages(workflowSession).ToArray();
+
+        reducer.InvocationCount.Should().Be(1);
+        sessionMessages.Should().ContainSingle().Which.MessageId.Should().Be("reduced-1");
+    }
+
+    /// <summary>
+    /// Tests that a <see cref="WorkflowChatHistoryOptions.ChatReducer"/> configured to trigger
+    /// before messages are retrieved reduces only the already-delivered history: it does not run
+    /// on the first turn (nothing has been delivered yet) and runs before the second turn's retrieval.
+    /// </summary>
+    [Fact]
+    public async Task Test_AsAgent_ChatReducerBeforeRetrievalReducesDeliveredHistoryAsync()
+    {
+        // Arrange
+        List<List<ChatMessage>> turns =
+        [
+            [new ChatMessage(ChatRole.Assistant, "First response") { MessageId = "r1" }],
+            [new ChatMessage(ChatRole.Assistant, "Second response") { MessageId = "r2" }],
+        ];
+        TestReplayAgent agent = new(turns, TestAgentId, TestAgentName);
+        Workflow workflow = new WorkflowBuilder(agent).Build();
+        ChatMessage reducedMessage = new(ChatRole.Assistant, "reduced") { MessageId = "reduced-1" };
+        RecordingChatReducer reducer = new([reducedMessage]);
+        WorkflowChatHistoryOptions options = new()
+        {
+            ChatReducer = reducer,
+            ReducerTriggerEvent = WorkflowChatHistoryOptions.ChatReducerTriggerEvent.BeforeMessagesRetrieval,
+        };
+        AIAgent workflowAgent = workflow.AsAIAgent("WorkflowAgent", chatHistoryOptions: options);
+        AgentSession session = await workflowAgent.CreateSessionAsync();
+
+        // Act - first turn: nothing has been delivered yet, so the reducer must not run.
+        await workflowAgent.RunAsync(new ChatMessage(ChatRole.User, "Hello"), session);
+        int invocationsAfterFirstTurn = reducer.InvocationCount;
+
+        // Act - second turn: the reducer runs before retrieving messages for the workflow.
+        await workflowAgent.RunAsync(new ChatMessage(ChatRole.User, "Hello again"), session);
+
+        // Assert
+        WorkflowSession workflowSession = session.Should().BeOfType<WorkflowSession>().Subject;
+        ChatMessage[] sessionMessages = workflowSession.ChatHistoryProvider.GetAllMessages(workflowSession).ToArray();
+
+        invocationsAfterFirstTurn.Should().Be(0, "the reducer should not run before anything has been delivered to the workflow");
+        reducer.InvocationCount.Should().Be(1, "the reducer should run once, before the second turn's retrieval");
+        sessionMessages[0].MessageId.Should().Be("reduced-1", "the already-delivered history should have been replaced by the reduced message");
+    }
+
+    /// <summary>
+    /// Tests that a <see cref="WorkflowChatHistoryOptions.StorageInputResponseMessageFilter"/>
+    /// excludes filtered response messages from the stored chat history while the request
+    /// messages are still stored.
+    /// </summary>
+    [Fact]
+    public async Task Test_AsAgent_StorageInputResponseMessageFilterExcludesResponsesAsync()
+    {
+        // Arrange
+        TestReplayAgent agent = new(TestMessages, TestAgentId, TestAgentName);
+        Workflow workflow = new WorkflowBuilder(agent).Build();
+        WorkflowChatHistoryOptions options = new()
+        {
+            StorageInputResponseMessageFilter = _ => [],
+        };
+        AIAgent workflowAgent = workflow.AsAIAgent("WorkflowAgent", chatHistoryOptions: options);
+
+        // Act
+        AgentSession session = await workflowAgent.CreateSessionAsync();
+        await workflowAgent.RunAsync(new ChatMessage(ChatRole.User, "Hello"), session);
+
+        // Assert
+        WorkflowSession workflowSession = session.Should().BeOfType<WorkflowSession>().Subject;
+        ChatMessage[] sessionMessages = workflowSession.ChatHistoryProvider.GetAllMessages(workflowSession).ToArray();
+
+        // Only the request message remains; all response messages were filtered out before storage.
+        sessionMessages.Should().OnlyContain(message => message.Role == ChatRole.User);
+    }
+
+    /// <summary>
+    /// A test <see cref="IChatReducer"/> that records how many times it was invoked and the
+    /// messages it last received, while returning a caller-configured reduced result.
+    /// </summary>
+    private sealed class RecordingChatReducer(IReadOnlyList<ChatMessage> reducedResult) : IChatReducer
+    {
+        public int InvocationCount { get; private set; }
+
+        public List<ChatMessage> LastInput { get; private set; } = [];
+
+        public Task<IEnumerable<ChatMessage>> ReduceAsync(IEnumerable<ChatMessage> messages, CancellationToken cancellationToken = default)
+        {
+            this.InvocationCount++;
+            this.LastInput = messages.ToList();
+            return Task.FromResult<IEnumerable<ChatMessage>>(reducedResult);
+        }
+    }
+
+    /// <summary>
     /// Tests that when a workflow emits a RequestInfoEvent with FunctionCallContent data,
     /// the AgentResponseUpdate preserves the original FunctionCallContent type.
     /// </summary>

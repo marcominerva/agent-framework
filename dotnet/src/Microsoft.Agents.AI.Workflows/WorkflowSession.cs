@@ -4,7 +4,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -68,7 +67,7 @@ internal sealed class WorkflowSession : AgentSession
         return true;
     }
 
-    public WorkflowSession(Workflow workflow, string sessionId, IWorkflowExecutionEnvironment executionEnvironment, bool includeExceptionDetails = false, bool includeWorkflowOutputsInResponse = false)
+    public WorkflowSession(Workflow workflow, string sessionId, IWorkflowExecutionEnvironment executionEnvironment, bool includeExceptionDetails = false, bool includeWorkflowOutputsInResponse = false, WorkflowChatHistoryProvider? chatHistoryProvider = null)
     {
         this._workflow = Throw.IfNull(workflow);
         this._includeExceptionDetails = includeExceptionDetails;
@@ -88,7 +87,7 @@ internal sealed class WorkflowSession : AgentSession
                 $"but received {env.GetType().Name}.");
 
         this.SessionId = Throw.IfNullOrEmpty(sessionId);
-        this.ChatHistoryProvider = new WorkflowChatHistoryProvider();
+        this.ChatHistoryProvider = chatHistoryProvider ?? new WorkflowChatHistoryProvider();
     }
 
     private CheckpointManager EnsureExternalizedInMemoryCheckpointing()
@@ -96,7 +95,7 @@ internal sealed class WorkflowSession : AgentSession
         return new(this._inMemoryCheckpointManager ??= new());
     }
 
-    public WorkflowSession(Workflow workflow, JsonElement serializedSession, IWorkflowExecutionEnvironment executionEnvironment, bool includeExceptionDetails = false, bool includeWorkflowOutputsInResponse = false, JsonSerializerOptions? jsonSerializerOptions = null)
+    public WorkflowSession(Workflow workflow, JsonElement serializedSession, IWorkflowExecutionEnvironment executionEnvironment, bool includeExceptionDetails = false, bool includeWorkflowOutputsInResponse = false, JsonSerializerOptions? jsonSerializerOptions = null, WorkflowChatHistoryProvider? chatHistoryProvider = null)
     {
         this._workflow = Throw.IfNull(workflow);
         this._includeExceptionDetails = includeExceptionDetails;
@@ -124,7 +123,7 @@ internal sealed class WorkflowSession : AgentSession
                 $"but received {env.GetType().Name}.");
 
         this.SessionId = sessionState.SessionId;
-        this.ChatHistoryProvider = new WorkflowChatHistoryProvider();
+        this.ChatHistoryProvider = chatHistoryProvider ?? new WorkflowChatHistoryProvider();
 
         this.LastCheckpoint = sessionState.LastCheckpoint;
         this.StateBag = sessionState.StateBag;
@@ -451,7 +450,7 @@ internal sealed class WorkflowSession : AgentSession
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         this.LastResponseId = Guid.NewGuid().ToString("N");
-        List<ChatMessage> messages = this.ChatHistoryProvider.GetFromBookmark(this).ToList();
+        List<ChatMessage> messages = await this.ChatHistoryProvider.GetFromBookmarkAsync(this, cancellationToken).ConfigureAwait(false);
 
         ResumeRunResult resumeResult =
             await this.CreateOrResumeRunAsync(messages, cancellationToken).ConfigureAwait(false);
