@@ -67,7 +67,17 @@ internal sealed class A2AAgentHandler : IAgentHandler
     }
 
     /// <inheritdoc/>
-    public async Task CancelAsync(RequestContext context, AgentEventQueue eventQueue, CancellationToken cancellationToken)
+    public Task CancelAsync(RequestContext context, AgentEventQueue eventQueue, CancellationToken cancellationToken)
+        => CancelTaskAsync(context, eventQueue, cancellationToken);
+
+    /// <summary>
+    /// Transitions the task identified by <paramref name="context"/> to the canceled state.
+    /// </summary>
+    /// <param name="context">The request context of the task to cancel.</param>
+    /// <param name="eventQueue">The queue the cancellation event is written to.</param>
+    /// <param name="cancellationToken">A <see cref="CancellationToken"/> to cancel the operation.</param>
+    /// <returns>A task that represents the asynchronous operation.</returns>
+    internal static async Task CancelTaskAsync(RequestContext context, AgentEventQueue eventQueue, CancellationToken cancellationToken)
     {
         var taskUpdater = new TaskUpdater(eventQueue, context.TaskId, context.ContextId);
         await taskUpdater.CancelAsync(cancellationToken).ConfigureAwait(false);

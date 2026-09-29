@@ -16,26 +16,54 @@ namespace Microsoft.Agents.AI.Hosting.OpenAI.Responses;
 internal sealed class ResponsesHttpHandler
 {
     private readonly IResponsesService _responsesService;
+    private readonly Func<HttpContext, IResponseExecutor?>? _executorSelector;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ResponsesHttpHandler"/> class.
     /// </summary>
     /// <param name="responsesService">The responses service.</param>
-    public ResponsesHttpHandler(IResponsesService responsesService)
+    /// <param name="executorSelector">
+    /// An optional delegate that selects the executor for each create request, returning <see langword="null"/>
+    /// when no agent matches the request. When omitted, the service's executor is used.
+    /// </param>
+    public ResponsesHttpHandler(IResponsesService responsesService, Func<HttpContext, IResponseExecutor?>? executorSelector = null)
     {
         this._responsesService = responsesService ?? throw new ArgumentNullException(nameof(responsesService));
+        this._executorSelector = executorSelector;
     }
 
     /// <summary>
     /// Creates a model response for the given input.
     /// </summary>
     public async Task<IResult> CreateResponseAsync(
+        HttpContext httpContext,
         [FromBody] CreateResponse request,
         [FromQuery] bool? stream,
         CancellationToken cancellationToken)
     {
+        // Select the agent before validation so an unmatched request never loads session or conversation state.
+        IResponseExecutor? executor = null;
+        if (this._executorSelector is not null)
+        {
+            executor = this._executorSelector(httpContext);
+            if (executor is null)
+            {
+                return Results.NotFound(new ErrorResponse
+                {
+                    Error = new ErrorDetails
+                    {
+                        Message = "No agent matches the request.",
+                        Type = "invalid_request_error",
+                        Code = "agent_not_found"
+                    }
+                });
+            }
+        }
+
         // Validate the request first
-        ResponseError? validationError = await this._responsesService.ValidateRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        ResponseError? validationError = executor is null
+            ? await this._responsesService.ValidateRequestAsync(request, cancellationToken).ConfigureAwait(false)
+            : await this._responsesService.ValidateRequestAsync(request, executor, cancellationToken).ConfigureAwait(false);
         if (validationError is not null)
         {
             var (statusCode, wireCode) = ResponseErrorCodes.MapValidationError(validationError.Code);
@@ -62,9 +90,9 @@ internal sealed class ResponsesHttpHandler
 
             if (shouldStream)
             {
-                var streamingResponse = this._responsesService.CreateResponseStreamingAsync(
-                    request,
-                    cancellationToken: cancellationToken);
+                var streamingResponse = executor is null
+                    ? this._responsesService.CreateResponseStreamingAsync(request, cancellationToken: cancellationToken)
+                    : this._responsesService.CreateResponseStreamingAsync(request, executor, cancellationToken);
 
                 return new SseJsonResult<StreamingResponseEvent>(
                     streamingResponse,
@@ -72,9 +100,9 @@ internal sealed class ResponsesHttpHandler
                     OpenAIHostingJsonContext.Default.StreamingResponseEvent);
             }
 
-            var response = await this._responsesService.CreateResponseAsync(
-                request,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+            var response = executor is null
+                ? await this._responsesService.CreateResponseAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false)
+                : await this._responsesService.CreateResponseAsync(request, executor, cancellationToken).ConfigureAwait(false);
 
             return response.Status switch
             {
