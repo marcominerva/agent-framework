@@ -120,9 +120,109 @@ public sealed class AgentSessionStoreTests
             () => store.GetOrCreateSessionAsync(null!, new AgentSessionStoreKey("conversation-1")).AsTask());
     }
 
+    [Fact]
+    public async Task GetSessionAsync_SessionId_ForwardsUnpartitionedKeyAsync()
+    {
+        // Arrange
+        var storedSession = new TestAgentSession();
+        var store = new TestAgentSessionStore(storedSession);
+        var agent = new Mock<AIAgent>();
+        using var cts = new CancellationTokenSource();
+
+        // Act
+        AgentSession? session = await store.GetSessionAsync(agent.Object, "conversation-1", cts.Token);
+
+        // Assert
+        Assert.Same(storedSession, session);
+        Assert.Equal(new AgentSessionStoreKey("conversation-1"), store.LastKey);
+        Assert.Null(store.LastKey!.Partitions);
+        Assert.Equal(cts.Token, store.LastCancellationToken);
+    }
+
+    [Fact]
+    public async Task SaveSessionAsync_SessionId_ForwardsUnpartitionedKeyAsync()
+    {
+        // Arrange
+        var store = new TestAgentSessionStore(session: null);
+        var agent = new Mock<AIAgent>();
+        var session = new TestAgentSession();
+        using var cts = new CancellationTokenSource();
+
+        // Act
+        await store.SaveSessionAsync(agent.Object, "conversation-1", session, cts.Token);
+
+        // Assert
+        Assert.Equal(new AgentSessionStoreKey("conversation-1"), store.LastKey);
+        Assert.Null(store.LastKey!.Partitions);
+        Assert.Same(session, store.LastSavedSession);
+        Assert.Equal(cts.Token, store.LastCancellationToken);
+    }
+
+    [Fact]
+    public async Task GetOrCreateSessionAsync_SessionId_ForwardsUnpartitionedKeyAsync()
+    {
+        // Arrange
+        var storedSession = new TestAgentSession();
+        var store = new TestAgentSessionStore(storedSession);
+        var agent = new Mock<AIAgent>();
+
+        // Act
+        AgentSession session = await store.GetOrCreateSessionAsync(agent.Object, "conversation-1");
+
+        // Assert
+        Assert.Same(storedSession, session);
+        Assert.Equal(new AgentSessionStoreKey("conversation-1"), store.LastKey);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SessionIdOverloads_InvalidSessionId_ThrowAsync(string sessionId)
+    {
+        // Arrange
+        var store = new TestAgentSessionStore(session: null);
+        var agent = new Mock<AIAgent>();
+
+        // Act and assert
+        await Assert.ThrowsAsync<ArgumentException>(
+            nameof(sessionId),
+            () => store.GetSessionAsync(agent.Object, sessionId).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            nameof(sessionId),
+            () => store.SaveSessionAsync(agent.Object, sessionId, new TestAgentSession()).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            nameof(sessionId),
+            () => store.GetOrCreateSessionAsync(agent.Object, sessionId).AsTask());
+        Assert.Null(store.LastKey);
+    }
+
+    [Fact]
+    public async Task SessionIdOverloads_NullSessionId_ThrowAsync()
+    {
+        // Arrange
+        var store = new TestAgentSessionStore(session: null);
+        var agent = new Mock<AIAgent>();
+
+        // Act and assert
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            "sessionId",
+            () => store.GetSessionAsync(agent.Object, (string)null!).AsTask());
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            "sessionId",
+            () => store.SaveSessionAsync(agent.Object, (string)null!, new TestAgentSession()).AsTask());
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            "sessionId",
+            () => store.GetOrCreateSessionAsync(agent.Object, (string)null!).AsTask());
+        Assert.Null(store.LastKey);
+    }
+
     private sealed class TestAgentSessionStore(AgentSession? session) : AgentSessionStore
     {
         public AgentSessionStoreKey? LastKey { get; private set; }
+
+        public AgentSession? LastSavedSession { get; private set; }
+
+        public CancellationToken LastCancellationToken { get; private set; }
 
         public override ValueTask<AgentSession?> GetSessionAsync(
             AIAgent agent,
@@ -130,6 +230,7 @@ public sealed class AgentSessionStoreTests
             CancellationToken cancellationToken = default)
         {
             this.LastKey = key;
+            this.LastCancellationToken = cancellationToken;
             return new(session);
         }
 
@@ -138,7 +239,12 @@ public sealed class AgentSessionStoreTests
             AgentSessionStoreKey key,
             AgentSession session,
             CancellationToken cancellationToken = default)
-            => default;
+        {
+            this.LastKey = key;
+            this.LastSavedSession = session;
+            this.LastCancellationToken = cancellationToken;
+            return default;
+        }
     }
 
     private sealed class TestAgentSession : AgentSession;

@@ -29,7 +29,8 @@ namespace Microsoft.Agents.AI.Hosting;
 /// </para>
 /// <para>
 /// <strong>Multi-user warning.</strong> This store partitions sessions by the <c>userId</c> supplied
-/// to <see cref="AgentSessionStore.GetSessionAsync"/> and <see cref="AgentSessionStore.SaveSessionAsync"/>.
+/// to <see cref="AgentSessionStore.GetSessionAsync(AIAgent, AgentSessionStoreKey, System.Threading.CancellationToken)"/>
+/// and <see cref="AgentSessionStore.SaveSessionAsync(AIAgent, AgentSessionStoreKey, AgentSession, System.Threading.CancellationToken)"/>.
 /// Multi-user hosts must supply a trusted user identifier, either directly or by wrapping this store in
 /// <see cref="IsolationKeyScopedAgentSessionStore"/> (typically by calling
 /// <c>UseClaimsBasedAgentIsolation(...)</c> from

@@ -19,6 +19,7 @@ namespace Microsoft.Agents.AI;
 [Experimental(DiagnosticIds.Experiments.AgentsAIExperiments)]
 public abstract class AgentSessionStore
 {
+#pragma warning disable RS0026 // The sessionId overloads are convenience forwarders for callers that do not need partitions.
     /// <summary>
     /// Saves an agent session to persistent storage.
     /// </summary>
@@ -32,6 +33,25 @@ public abstract class AgentSessionStore
         AgentSessionStoreKey key,
         AgentSession session,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Saves an agent session to persistent storage using a key with no partitions.
+    /// </summary>
+    /// <param name="agent">The agent that owns this session.</param>
+    /// <param name="sessionId">The logical session identifier.</param>
+    /// <param name="session">The session to save.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests.</param>
+    /// <returns>A task that represents the asynchronous save operation.</returns>
+    /// <remarks>
+    /// This method creates an <see cref="AgentSessionStoreKey"/> from <paramref name="sessionId"/> and calls
+    /// <see cref="SaveSessionAsync(AIAgent, AgentSessionStoreKey, AgentSession, CancellationToken)"/>.
+    /// </remarks>
+    public ValueTask SaveSessionAsync(
+        AIAgent agent,
+        string sessionId,
+        AgentSession session,
+        CancellationToken cancellationToken = default)
+        => this.SaveSessionAsync(agent, new AgentSessionStoreKey(sessionId), session, cancellationToken);
 
     /// <summary>
     /// Retrieves an agent session from persistent storage, or <see langword="null"/> when no session is stored
@@ -56,6 +76,27 @@ public abstract class AgentSessionStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves an agent session from persistent storage using a key with no partitions, or
+    /// <see langword="null"/> when no session is stored for the given identifier.
+    /// </summary>
+    /// <param name="agent">The agent that owns this session.</param>
+    /// <param name="sessionId">The logical session identifier.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests.</param>
+    /// <returns>
+    /// A task whose result contains the restored session, or <see langword="null"/> when nothing is stored for
+    /// the given identifier.
+    /// </returns>
+    /// <remarks>
+    /// This method creates an <see cref="AgentSessionStoreKey"/> from <paramref name="sessionId"/> and calls
+    /// <see cref="GetSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken)"/>.
+    /// </remarks>
+    public ValueTask<AgentSession?> GetSessionAsync(
+        AIAgent agent,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+        => this.GetSessionAsync(agent, new AgentSessionStoreKey(sessionId), cancellationToken);
+
+    /// <summary>
     /// Retrieves the stored session for the given identifiers, or creates a new one when none is stored.
     /// </summary>
     /// <param name="agent">The agent that owns this session.</param>
@@ -63,9 +104,10 @@ public abstract class AgentSessionStore
     /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests.</param>
     /// <returns>A task whose result is always a usable session.</returns>
     /// <remarks>
-    /// The default implementation calls <see cref="GetSessionAsync"/> and creates a session through
-    /// <see cref="AIAgent.CreateSessionAsync"/> only when the lookup returns <see langword="null"/>.
-    /// Implementations that override <see cref="GetSessionAsync"/> receive this behavior automatically.
+    /// The default implementation calls <see cref="GetSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken)"/>
+    /// and creates a session through <see cref="AIAgent.CreateSessionAsync"/> only when the lookup returns
+    /// <see langword="null"/>. Implementations that override
+    /// <see cref="GetSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken)"/> receive this behavior automatically.
     /// </remarks>
     public virtual async ValueTask<AgentSession> GetOrCreateSessionAsync(
         AIAgent agent,
@@ -77,6 +119,25 @@ public abstract class AgentSessionStore
         return await this.GetSessionAsync(agent, key, cancellationToken).ConfigureAwait(false)
             ?? await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Retrieves the stored session for the given identifier using a key with no partitions, or creates a new
+    /// one when none is stored.
+    /// </summary>
+    /// <param name="agent">The agent that owns this session.</param>
+    /// <param name="sessionId">The logical session identifier.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests.</param>
+    /// <returns>A task whose result is always a usable session.</returns>
+    /// <remarks>
+    /// This method creates an <see cref="AgentSessionStoreKey"/> from <paramref name="sessionId"/> and calls
+    /// <see cref="GetOrCreateSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken)"/>.
+    /// </remarks>
+    public ValueTask<AgentSession> GetOrCreateSessionAsync(
+        AIAgent agent,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+        => this.GetOrCreateSessionAsync(agent, new AgentSessionStoreKey(sessionId), cancellationToken);
+#pragma warning restore RS0026
 
     /// <summary>Asks the store for an object of the specified type.</summary>
     /// <param name="serviceType">The type of object being requested.</param>
